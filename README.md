@@ -56,7 +56,6 @@ system design.
 ## Files
 
 - `dcmotor_minimal.cir` — core PI + state-space model
-- `dcmotor_pwm_vis.cir` — adds PWM visualization layer
 
 ## Tools
 
