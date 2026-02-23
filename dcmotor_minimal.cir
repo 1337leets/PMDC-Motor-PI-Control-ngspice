@@ -1,0 +1,60 @@
+* dcmotor_minimal.cir
+* PMDC motor - PI kontrolor, minimal state-space
+*
+* Sadece uc dinamik dugum var: nd_ia, nd_omega, nd_intg
+* Hic ara dugum yok /  algebraic loop yok
+* limit() yerine min(max())
+*
+* Denklemler:
+*   La * dIa/dt    = Va - Ra*Ia - Ke*omega
+*   J  * dOmega/dt = Kt*Ia - Bm*omega
+*   dIntg/dt       = Ki * (omega_ref - omega)
+*
+*   Va = min(Vbus, max(0, Kp*(omega_ref - omega) + Intg))
+*
+* ============================================================
+
+.tran 100m 1 uic
+
+.param Vbus      = 24
+.param Ke        = 0.02
+.param Kt        = 0.02
+.param Ra        = 0.5
+.param La        = 2e-3
+.param J         = 1e-4
+.param Bm        = 1e-4
+.param omega_ref = 314
+.param Kp        = 0.05
+.param Ki        = 0.5
+
+.options method=gear reltol=1e-3 abstol=1e-6 vntol=1e-4 itl4=100 maxstep=100m
+
+* --- Armature akimi state ---
+* La * dIa/dt = Va - Ra*Ia - Ke*omega
+Bia  0  nd_ia  I = { min(Vbus, max(0, Kp*(omega_ref - V(nd_omega)) + V(nd_intg))) - Ra*V(nd_ia) - Ke*V(nd_omega) }
+Cia  nd_ia  0  {La}
+
+* --- Mekanik state ---
+* J * dOmega/dt = Kt*Ia - Bm*omega
+Bomega  0  nd_omega  I = { Kt*V(nd_ia) - Bm*V(nd_omega) }
+Comega  nd_omega  0  {J}
+
+* --- Integral state ---
+* dIntg/dt = Ki * err
+Bintg  0  nd_intg  I = { Ki * (omega_ref - V(nd_omega)) }
+Cintg  nd_intg  0  1
+
+* --- Gozlemlemek icin yardimci dugumler (dinamik degil) ---
+Bva    nd_va    0  V = { min(Vbus, max(0, Kp*(omega_ref - V(nd_omega)) + V(nd_intg))) }
+Berr   nd_err   0  V = { omega_ref - V(nd_omega) }
+
+.ic V(nd_ia)=0  V(nd_omega)=0  V(nd_intg)=0
+
+.control
+  set noaskquit
+  run
+  save time V(nd_omega) V(nd_ia) V(nd_intg) V(nd_va) V(nd_err)
+  wrdata dcmotor_minimal.csv time V(nd_omega) V(nd_ia) V(nd_intg) V(nd_va) V(nd_err)
+.endc
+
+.end
