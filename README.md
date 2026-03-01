@@ -42,7 +42,7 @@ Va = clamp(Kp*err + Intg, 0, Vbus)
 
 - Step response settles to 314 rad/s with minor overshoot
 - PI gains: Kp = 0.05, Ki = 0.5
-- PWM visualization (5 kHz) included as separate output layer
+- PWM visualization attempted via sawtooth comparator; limited by ngspice B-source math function support. LTspice port planned.
 
 ## Why State-Space in ngspice?
 
