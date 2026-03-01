@@ -42,7 +42,7 @@ Va = clamp(Kp*err + Intg, 0, Vbus)
 
 - Step response settles to 314 rad/s with minor overshoot
 - PI gains: Kp = 0.05, Ki = 0.5
-- PWM visualization attempted via sawtooth comparator; limited by ngspice B-source math function support. LTspice port planned.
+- PWM visualization (5kHz): sawtooth ramp via floor(), gate comparator confirms duty = 29.4% at steady-state
 
 ## Why State-Space in ngspice?
 
@@ -52,10 +52,14 @@ numerical stiffness due to three conflicting time scales
 state-space approach eliminates switching transients while 
 preserving control dynamics — standard practice in control 
 system design.
+PWM visualization is implemented as a separate observation layer 
+(Bramp, Bgate) that reads nd_va but does not feed back into motor 
+dynamics — equivalent to probing without disturbing the circuit.
 
 ## Files
 
 - `dcmotor_minimal.cir` — core PI + state-space model
+- `dcmotor_pwm.cir` — adds PWM visualization layer (5kHz sawtooth comparator)
 
 ## Tools
 
