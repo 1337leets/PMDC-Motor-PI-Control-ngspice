@@ -44,6 +44,12 @@ Va = clamp(Kp*err + Intg, 0, Vbus)
 - PI gains: Kp = 0.05, Ki = 0.5
 - PWM visualization (5kHz): sawtooth ramp via floor(), gate comparator confirms duty = 29.4% at steady-state
 
+### Step Response
+![Step Response](plots/step_response.png)
+
+### PWM Visualization (steady-state, zoomed)
+![PWM](plots/pwm.png)
+
 ## Why State-Space in ngspice?
 
 Cycle-by-cycle PWM simulation in ngspice creates severe 
