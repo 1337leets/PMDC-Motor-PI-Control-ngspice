@@ -3,7 +3,7 @@
 *
 * Sadece uc dinamik dugum var: nd_ia, nd_omega, nd_intg
 * Hic ara dugum yok /  algebraic loop yok
-* limit() yerine min(max())
+* limit() yerine min(max()) kullandım
 *
 * Denklemler:
 *   La * dIa/dt    = Va - Ra*Ia - Ke*omega
