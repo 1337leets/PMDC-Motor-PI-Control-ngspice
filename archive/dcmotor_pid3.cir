@@ -1,0 +1,151 @@
+* dcmotor_pid3.cir
+* PMDC motor speed control - PI controller with PWM
+* Fixes: correct current sensing, freewheel diode, anti-windup loop,
+*        PWM reset pulse, solver options
+* ---------------------------------------------------------------
+
+.tran 1u 200m uic
+
+* --- Parameters ---
+.param Vbus      = 24
+.param fsw       = 5000
+.param Tperiod   = { 1/fsw }
+
+* Motor parameters
+.param Ke   = 0.02      ; V/(rad/s)  back-EMF constant
+.param Kt   = 0.02      ; N*m/A      torque constant
+.param Ra   = 0.5       ; Ohm        armature resistance
+.param La   = 2e-3      ; H          armature inductance
+.param J    = 1e-4      ; kg*m^2     moment of inertia
+.param Bm   = 1e-4      ; N*m*s/rad  viscous friction
+.param Tload= 0         ; N*m        load torque
+
+* PI controller parameters
+.param Kp   = 0.02
+.param Ki   = 2
+.param Kaw  = 0.3       ; anti-windup gain (keep low for loop stability)
+
+* PWM / comparator parameters
+.param Vctrl_high = 12  ; V  -> PWM carrier and output upper limit
+.param Vctrl_thr  = 2.5 ; V  -> switch threshold
+.param Iramp  = 600u    ; ramp current  (Iramp/Cramp = dV/dt = Vramp*fsw)
+.param Cramp  = 10n     ; ramp capacitor
+
+* ---------------------------------------------------------------
+* Numerical solver options  (critical for convergence)
+* ---------------------------------------------------------------
+.options method=gear
++        reltol=1e-3
++        abstol=1e-6
++        vntol=1e-4
++        itl4=100
++        maxstep=2u
+
+* ---------------------------------------------------------------
+* POWER AND SWITCHING
+* ---------------------------------------------------------------
+Vsup  Vsup_node 0  DC {Vbus}
+
+* Main switch: Vsup_node -> arm, controlled by the gate signal
+Ssw  Vsup_node arm  gate 0  SWmod
+.model SWmod SW(Ron=0.01 Roff=1Meg Vt={Vctrl_thr})
+
+* ---------------------------------------------------------------
+* ARMATURE CIRCUIT
+* ---------------------------------------------------------------
+* Vmeas: zero-volt source for current sensing (ammeter)
+Vmeas  arm  a_meas  DC 0
+
+Rarm  a_meas  a1  {Ra}
+La    a1      a2  {La}
+
+* Back-EMF source
+Eemf  a2  0  VALUE = { Ke * V(omega) }
+
+* Freewheel diode: to clamp the inductive kick
+* Motor branch: arm -- a2  (Vmeas + Rarm + La + Eemf)
+* Diode anode to the motor, cathode to the Vsup side (or the reverse for freewheeling)
+* Standard low-side PWM: when the switch OPENS, the La current must keep flowing
+*   -> Dfw anode=0, cathode=arm  (current flows from arm to 0, diode conducts)
+Dfw  0  arm  Dmod
+.model Dmod D(Is=1e-9 Rs=0.01)
+
+* ---------------------------------------------------------------
+* MECHANICAL MODEL
+* V(omega) voltage across the capacitor = angular velocity (rad/s)
+* C * dV/dt = I  =>  dOmega/dt = (Kt*Ia - Bm*Omega - Tload) / J
+* With C=J, 1 A would equal 1 N*m; here C=1 is chosen and the current is scaled.
+* ---------------------------------------------------------------
+* FIXED: correct current reading with I(Vmeas)
+Baccel  omega  0  I = { ( Kt * I(Vmeas) - Bm * V(omega) - Tload ) / J }
+Comega  omega  0  1
+
+* ---------------------------------------------------------------
+* CONTROLLER
+* ---------------------------------------------------------------
+* Reference speed: ~3000 rpm = 314 rad/s
+Vref  ref  0  DC 314
+
+* Error signal
+Berr  err  0  V = { V(ref) - V(omega) }
+
+* --- Anti-windup PI ---
+* Step 1: unsaturated PI output (intermediate node)
+Bpid_raw  pid_raw  0  V = { Kp * V(err) + V(int) }
+
+* Step 2: saturation
+Bsat  Vsat  0  V = { limit( V(pid_raw), 0, Vctrl_high ) }
+
+* Step 3: integral - back-calculation anti-windup
+* dInt/dt = Ki*err + Kaw*(sat_out - raw_out)
+* Kaw kept small (0.3) to reduce the algebraic loop effect
+Bi_int  int  0  I = { Ki * V(err) + Kaw * ( V(Vsat) - V(pid_raw) ) }
+Cint  int  0  1
+
+* Controller output
+Bpid  Vpid  0  V = { V(Vsat) }
+
+* ---------------------------------------------------------------
+* SAWTOOTH (RAMP) GENERATOR - PWM carrier
+* ---------------------------------------------------------------
+* Constant current -> charges the capacitor -> linear ramp
+* Reset: a short pulse discharges the capacitor
+Bi_rnode  rnode  0  I = { Iramp }
+C_r       rnode  0  {Cramp}
+
+* Reset pulse: rise/fall 100n, width 500n -- resets the ramp cleanly
+Vreset  rtrig  0  PULSE(0 {Vctrl_high} 0 100n 100n 500n {Tperiod})
+Sres  rnode  0  rtrig  0  SWres
+.model SWres SW(Ron=0.01 Roff=1Meg Vt=2)
+
+* ---------------------------------------------------------------
+* PWM COMPARATOR -> GATE SIGNAL
+* ---------------------------------------------------------------
+* If Vpid > V(rnode), gate is high (switch closes)
+Bgate  gate  0  V = { Vctrl_high * ( V(Vpid) > V(rnode) ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(omega)=0  V(int)=0  V(rnode)=0
+
+* ---------------------------------------------------------------
+* SIMULATION CONTROL
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  * Save
+  save time V(omega) V(Vpid) V(err) V(int) V(Vsat) V(rnode) V(gate)
+
+  * CSV output
+  wrdata dcmotor_out3.csv time V(omega) V(Vpid) V(err) V(int) V(Vsat) V(rnode) V(gate)
+
+  * Basic plots (if the ngspice GUI is open)
+  * plot V(omega) vs time
+  * plot V(Vpid) V(rnode) vs time
+
+.endc
+
+.end

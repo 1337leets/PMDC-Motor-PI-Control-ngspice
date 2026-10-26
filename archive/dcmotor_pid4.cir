@@ -1,0 +1,174 @@
+* dcmotor_pid4.cir
+* PMDC motor speed control - PI controller + PWM
+* Mathematical verification notes:
+*
+*   Mechanical time constant: tau_m = J/Bm = 1e-4/1e-4 = 1.0 s
+*   Electrical time constant: tau_e = La/Ra = 2m/0.5 = 4 ms
+*   Steady-state: Va_ss = 7.07V, duty = 29.4%, Ia_ss = 1.57A
+*   Ramp peak voltage: Iramp*Tperiod/Cramp = 600u*200u/10n = 12V OK
+*   Kp*err0 = 0.05*314 = 15.7V -> saturates at start (good)
+*   Simulation time 2s: since tau_m=1s, settling ~3-5*tau_m
+*
+*   Diode direction: anode=arm, cathode=0
+*     When the switch opens, the La current wants to keep flowing arm->0
+*     => Dfw(anode=arm, cathode=0) provides this path OK
+*
+*   Sign of I(Vmeas):
+*     Vmeas: arm(+) -> a_meas(-), normal current enters the + terminal
+*     => ngspice I(Vmeas) positive = motor current positive OK
+*
+* ---------------------------------------------------------------
+
+.tran 5u 2 uic
+
+* --- Parameters ---
+.param Vbus     = 24
+.param fsw      = 5000
+.param Tperiod  = { 1/fsw }
+
+* Motor parameters (PMDC)
+.param Ke   = 0.02      ; V/(rad/s)   back-EMF constant
+.param Kt   = 0.02      ; N*m/A       torque constant (Ke=Kt in SI units)
+.param Ra   = 0.5       ; Ohm         armature resistance
+.param La   = 2e-3      ; H           armature inductance
+.param J    = 1e-4      ; kg*m^2      moment of inertia
+.param Bm   = 1e-4      ; N*m*s/rad   viscous friction
+.param Tload= 0         ; N*m         load torque (0 = no load)
+
+* PI gains
+* Kp*err0 = 0.05*314 = 15.7V > Vctrl_high -> full duty at start OK
+.param Kp   = 0.05
+.param Ki   = 2
+
+* PWM parameters
+.param Vctrl_high = 12      ; V   PWM carrier and output upper limit
+.param Vctrl_thr  = 2.5     ; V   switch threshold voltage
+.param Iramp  = 600u        ; A   ramp current
+.param Cramp  = 10n         ; F   ramp capacitor -> peak = 12V OK
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* ---------------------------------------------------------------
+* method=gear: for stiff systems (tau_e=4ms, tau_m=1s -> very stiff)
+* maxstep=10u: PWM period is 200us, at least 20 steps per period
+.options method=gear
++        reltol=1e-3
++        abstol=1e-6
++        vntol=1e-4
++        itl4=150
++        maxstep=10u
+
+* ---------------------------------------------------------------
+* POWER AND SWITCHING
+* ---------------------------------------------------------------
+Vsup  Vsup_node 0  DC {Vbus}
+
+* Low-side PWM switch: Vsup_node -> arm
+* When the switch closes: Vsup -> motor -> 0 (current flows)
+Ssw  Vsup_node  arm  gate  0  SWmod
+.model SWmod SW(Ron=0.01 Roff=1Meg Vt={Vctrl_thr})
+
+* ---------------------------------------------------------------
+* ARMATURE CIRCUIT
+* ---------------------------------------------------------------
+* Vmeas: arm(+) -> a_meas(-), DC=0
+* I(Vmeas) positive = current flowing from arm to a_meas = motor current OK
+Vmeas  arm  a_meas  DC 0
+
+Rarm  a_meas  a1  {Ra}
+La    a1      a2  {La}
+
+* Back-EMF: omega positive -> a2 positive (brakes the motor, correct direction)
+Eemf  a2  0  VALUE = { Ke * V(omega) }
+
+* Freewheel diode
+* When the switch opens: La current keeps flowing arm->Rarm->La->Eemf->0
+* For this current the loop must close through 0 -> Dfw -> arm
+* => not anode=0! Current flows from arm to 0, diode anode=arm, cathode=0
+* (The diode conducts in the conventional current direction: arm -> 0)
+Dfw  arm  0  Dmod
+.model Dmod D(Is=1e-9 Rs=0.05)
+
+* ---------------------------------------------------------------
+* MECHANICAL MODEL
+* ---------------------------------------------------------------
+* Newton's 2nd law: J * dOmega/dt = Kt*Ia - Bm*Omega - Tload
+* Modeled in ngspice with C * dV/dt = I
+* Here C=J, V=omega, I = Kt*Ia - Bm*Omega - Tload
+* J=1e-4 F chosen -> V(omega) directly in rad/s
+*
+* Sign of I(Vmeas): positive = motor current with the arm(+)->a_meas(-) definition OK
+Baccel  omega  0  I = { Kt * I(Vmeas) - Bm * V(omega) - Tload }
+Comega  omega  0  {J}
+
+* ---------------------------------------------------------------
+* PI CONTROLLER
+* ---------------------------------------------------------------
+* Target: omega_ref = 314 rad/s (~3000 rpm)
+Vref  ref  0  DC 314
+
+* Error: err = ref - omega (positive error -> more voltage needed)
+Berr  err  0  V = { V(ref) - V(omega) }
+
+* Proportional term
+Bprop  prop  0  V = { Kp * V(err) }
+
+* Integral term
+* dInt/dt = Ki * err  ->  Ci * dV(int)/dt = Ki * V(err)
+* Ci = 1F chosen, Ki/Ci = Ki = 2 -> effective integral gain
+Bi_int  int  0  I = { Ki * V(err) }
+Cint    int  0  1
+
+* Raw PI output: prop + integral
+Bpid_raw  pid_raw  0  V = { V(prop) + V(int) }
+
+* Saturation: limit between 0 and Vctrl_high
+* Lower limit 0: unidirectional driver, negative voltage cannot be applied
+Bsat  Vsat  0  V = { limit( V(pid_raw), 0, Vctrl_high ) }
+
+* ---------------------------------------------------------------
+* PWM GENERATOR
+* ---------------------------------------------------------------
+* Constant current Iramp charges capacitor Cramp -> linear ramp
+* Peak voltage = Iramp * Tperiod / Cramp = 600u * 200u / 10n = 12V OK
+Bi_ramp  rnode  0  I = { Iramp }
+Cramp    rnode  0  {Cramp}
+
+* Periodic reset: reset the ramp at the start of every Tperiod
+* rise=100n, fall=100n, pulse_width=300n (short but stable)
+Vreset  rtrig  0  PULSE(0 {Vctrl_high} 0 100n 100n 300n {Tperiod})
+Sres  rnode  0  rtrig  0  SWres
+.model SWres SW(Ron=0.1 Roff=1Meg Vt=2)
+
+* ---------------------------------------------------------------
+* PWM COMPARATOR -> GATE
+* ---------------------------------------------------------------
+* Vsat > V(rnode) -> gate high -> switch closes -> motor is driven
+Bgate  gate  0  V = { Vctrl_high * ( V(Vsat) > V(rnode) ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(omega)=0  V(int)=0  V(rnode)=0  V(prop)=0  V(pid_raw)=0  V(Vsat)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(omega) V(err) V(int) V(prop) V(pid_raw) V(Vsat) V(rnode) V(gate)
+
+  * CSV output (for analysis in Python/Excel)
+  wrdata dcmotor_out4.csv time V(omega) V(err) V(int) V(prop) V(pid_raw) V(Vsat) V(gate)
+
+  * Basic control plots (enable if the ngspice GUI is available)
+  * plot V(omega)           ; speed response - should converge to 314 rad/s
+  * plot V(err)             ; error - should converge to 0
+  * plot V(Vsat) V(rnode)   ; PWM signal
+  * plot V(int) V(prop)     ; PI terms
+
+.endc
+
+.end

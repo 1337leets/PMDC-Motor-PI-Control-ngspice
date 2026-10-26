@@ -1,0 +1,78 @@
+* dcmotor_pid.cir
+* PMDC motor speed control example (PI controller) for ngspice
+* Save as dcmotor_pid_fixed2.cir and run: ngspice dcmotor_pid_fixed2.cir
+
+.param Vbus=24
+.param fsw=5000
+.param Kp=0.5
+.param Ki=50
+.param Ke=0.02
+.param Kt=0.02
+.param Ra=0.5
+.param La=2e-3
+.param J=1e-4
+.param Bm=1e-4
+.param Tload=0
+.param Vramp=5
+.param Vctrl_high=12
+.param Vctrl_thr=2.5
+.param Iramp=10u
+.param Cramp=10u
+.param Cint=1
+.param Comega=1
+.param Tperiod = 1/fsw
+
+* --- Power / switching ---
+Vsup Vsup_node 0 DC {Vbus}
+* Ssw: main+ main- control+ control- model
+* control nodes are 'gate' and 0 (reference)
+Ssw Vsup_node arm gate 0 SWmod
+.model SWmod SW(Ron=0.01 Roff=1Meg Vt={Vctrl_thr})
+
+* armature measurement / circuit
+Vmeas arm a_meas DC 0
+Rarm a_meas a1 {Ra}
+La a1 a2 {La}
+Eemf a2 0 VALUE = { Ke * V(omega) }
+Dfw a1 0 Dmod
+.model Dmod D(Is=1e-9)
+
+* --- Mechanical model: inject acceleration current into 'omega' node's capacitor ---
+* I = (Kt * Iarm - Bm*omega - Tload) / J  --> current into capacitor representing d(omega)/dt
+Baccel omega 0 I = { ( {Kt} * I(Vmeas) - {Bm} * V(omega) - {Tload} ) / {J} }
+Comega omega 0 {Comega}
+
+* --- Controller (error + PI) ---
+Vref ref 0 DC 314    ; target omega (rad/s) ~ 3000 rpm ~= 314 rad/s
+Berr err 0 V = V(ref) - V(omega)
+
+* integral implemented as current into capacitor node 'int'
+Bi_int int 0 I = { Ki * V(err) }
+Cint int 0 {Cint}
+
+Bpid Vpid 0 V = { Kp * V(err) + V(int) }
+
+* --- Sawtooth (ramp) generator for PWM ----
+Bi_rnode rnode 0 I = { Iramp }
+C_r rnode 0 {Cramp}
+Vreset rtrig 0 PULSE(0 {Vctrl_high} 0 1u 1u 1u {Tperiod})
+Sres rnode 0 rtrig 0 SWres
+.model SWres SW(Ron=0.01 Roff=1Meg Vt=2)
+
+* comparator -> gate
+* gate is driven high when Vpid > V(rnode)
+Bgate gate 0 V = { Vctrl_high * ( V(Vpid) > V(rnode) ) }
+
+* --- initial condition and simulation control ---
+.ic V(omega)=0 V(int)=0 V(rnode)=0
+
+.control
+  set noaskquit
+  tran 1u 200m uic
+  save time V(omega) V(Vpid) V(err) I(Vmeas) V(rnode) V(gate)
+  run
+  wrdata dcmotor_out.csv time V(omega) V(Vpid) V(err) I(Vmeas)
+  plot V(omega) V(Vpid) V(err)
+.endc
+
+.end

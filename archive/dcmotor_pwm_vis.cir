@@ -1,0 +1,101 @@
+* dcmotor_pwm_vis.cir
+* PMDC motor - PI controller + PWM visualization
+*
+* Motor dynamics: averaged state-space (stable, no numerical issues)
+* PWM layer: added for observation only, does not affect the motor model
+*
+* Logic:
+*   nd_va = PI output = average motor voltage  [0, Vbus]
+*   duty  = nd_va / Vbus
+*   PWM gate: gate=Vbus when nd_va > ramp, gate=0 when nd_va < ramp
+*   The motor is driven by nd_va (averaged) -> numerical stability is kept
+*
+* ============================================================
+
+.tran 100m 1 uic
+
+* --- Motor parameters ---
+.param Vbus      = 24
+.param Ke        = 0.02
+.param Kt        = 0.02
+.param Ra        = 0.5
+.param La        = 2e-3
+.param J         = 1e-4
+.param Bm        = 1e-4
+
+* --- Controller ---
+.param omega_ref = 314
+.param Kp        = 0.05
+.param Ki        = 0.5
+
+* --- PWM ---
+.param fsw       = 5000
+.param Tperiod   = { 1/fsw }
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* A coarse step is enough for the motor states
+* To see the PWM, maxstep must be below the PWM period
+* ---------------------------------------------------------------
+.options method=gear reltol=1e-3 abstol=1e-6 vntol=1e-4 itl4=100 maxstep=20u
+
+* ---------------------------------------------------------------
+* MOTOR STATE-SPACE (averaged, stable)
+* ---------------------------------------------------------------
+
+* Armature current: La * dIa/dt = Va - Ra*Ia - Ke*omega
+Bia  0  nd_ia  I = { min(Vbus, max(0, Kp*(omega_ref - V(nd_omega)) + V(nd_intg))) - Ra*V(nd_ia) - Ke*V(nd_omega) }
+Cia  nd_ia  0  {La}
+
+* Mechanical: J * dOmega/dt = Kt*Ia - Bm*omega
+Bomega  0  nd_omega  I = { Kt*V(nd_ia) - Bm*V(nd_omega) }
+Comega  nd_omega  0  {J}
+
+* Integral: dIntg/dt = Ki * err
+Bintg  0  nd_intg  I = { Ki * (omega_ref - V(nd_omega)) }
+Cintg  nd_intg  0  1
+
+* PI output (average motor voltage)
+Bva  nd_va  0  V = { min(Vbus, max(0, Kp*(omega_ref - V(nd_omega)) + V(nd_intg))) }
+
+* Error
+Berr  nd_err  0  V = { omega_ref - V(nd_omega) }
+
+* ---------------------------------------------------------------
+* PWM VISUALIZATION (does not affect the motor model)
+* No switch, mathematical ramp via floor() -> clean and stable
+* ---------------------------------------------------------------
+
+* Sawtooth ramp: rises linearly from 0 to 12V, resets every Tperiod
+* floor(time/Tperiod)*Tperiod = start time of the current period
+* time - start = elapsed time within the period [0, Tperiod]
+* 12 * (elapsed / Tperiod) = [0, 12V] linear ramp
+Bramp  nd_ramp  0  V = { 12 * fmod(time, Tperiod) / Tperiod }
+
+* Duty cycle: nd_va/Vbus -> [0,1]
+* Example: nd_va=7.07V -> duty=0.294 -> 29.4%
+Bduty  nd_duty  0  V = { V(nd_va) / Vbus }
+
+* Gate signal: if duty*12 > ramp then gate=Vbus (on), otherwise 0 (off)
+* duty*12: PI output normalized to the [0,12] range
+* The ramp is also [0,12] -> the comparison is valid
+Bgate  nd_gate  0  V = { Vbus * ( (V(nd_va)/2) > V(nd_ramp) ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(nd_ia)=0  V(nd_omega)=0  V(nd_intg)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(nd_omega) V(nd_ia) V(nd_intg) V(nd_va) V(nd_err) V(nd_duty) V(nd_gate) V(nd_ramp)
+  wrdata dcmotor_pwm_vis.csv time V(nd_omega) V(nd_ia) V(nd_intg) V(nd_va) V(nd_err) V(nd_duty) V(nd_gate) V(nd_ramp)
+
+.endc
+
+.end

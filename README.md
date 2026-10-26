@@ -12,15 +12,20 @@ state variables — no switching, no algebraic loops.
 
 ## Model
 
-Two state variables:
+Three state variables, each stored as the voltage across a capacitor:
 - `V(nd_ia)` = armature current [A]
 - `V(nd_omega)` = angular velocity [rad/s]
+- `V(nd_intg)` = PI integrator state [V]
 
 Differential equations:
-La * dIa/dt    = Va - RaIa - Keomega
-J  * dOmega/dt = KtIa - Bmomega
+
+```
+La * dIa/dt    = Va - Ra*Ia - Ke*omega
+J  * dOmega/dt = Kt*Ia - Bm*omega
 dIntg/dt       = Ki * (omega_ref - omega)
 Va = clamp(Kp*err + Intg, 0, Vbus)
+```
+
 ## Motor Parameters
 
 | Parameter | Value | Unit |
@@ -66,6 +71,28 @@ dynamics — equivalent to probing without disturbing the circuit.
 
 - `dcmotor_minimal.cir` — core PI + state-space model
 - `dcmotor_pwm.cir` — adds PWM visualization layer (5kHz sawtooth comparator)
+- `archive/` — earlier development iterations, kept for reference (see below)
+
+## Development History
+
+The final model came out of a series of attempts, kept in `archive/`.
+The first versions simulated the switching converter cycle by cycle;
+the stiffness problem described above is what pushed the design toward
+the averaged state-space model.
+
+| File | Approach |
+|------|----------|
+| `dcmotor_pid.cir` | First switching PWM model (voltage-controlled switch + ramp reset) |
+| `dcmotor_pid2.cir` | Back-calculation anti-windup and steady-state `.measure` checks |
+| `dcmotor_pid3.cir` | Current sensing fix, freewheel diode, PWM reset pulse, solver options |
+| `dcmotor_pid4.cir` – `dcmotor_pid6.cir` | Analytical checks of steady state, ramp amplitude, diode and sensor polarity |
+| `dcmotor_pid_final.cir` | Last switching version (back-EMF sign and freewheel direction fixed) |
+| `dcmotor_averaged.cir` | Switch removed: PI output drives the motor as average voltage |
+| `dcmotor_statespace.cir` | Ia and omega as capacitor states, no algebraic loops |
+| `dcmotor_pwm_vis.cir` | First version of the PWM observation layer |
+
+The archived netlists are kept as they were, with only their comments
+translated to English. They are not maintained.
 
 ## Tools
 

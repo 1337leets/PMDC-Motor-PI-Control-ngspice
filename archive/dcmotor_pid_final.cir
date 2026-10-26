@@ -1,0 +1,129 @@
+* dcmotor_pid_final.cir
+* PMDC motor speed control - PI controller + PWM
+* Run this file directly, do not look at any other version.
+*
+* SUMMARY OF FIXES:
+*   1. Eemf a2 0  (V(a2)=+Ke*omega, braking is correct)
+*   2. Dfw  0  arm (freewheeling: conducts in the 0->arm direction)
+*   3. All PI nodes use the nd_ prefix (no reserved-word clash)
+*
+* ============================================================
+
+.tran 5u 2 uic
+
+* --- Parameters ---
+.param Vbus     = 24
+.param fsw      = 5000
+.param Tperiod  = { 1/fsw }
+
+.param Ke   = 0.02
+.param Kt   = 0.02
+.param Ra   = 0.5
+.param La   = 2e-3
+.param J    = 1e-4
+.param Bm   = 1e-4
+.param Tload= 0
+
+.param Kp         = 0.05
+.param Ki         = 2
+.param Vctrl_high = 12
+.param Vctrl_thr  = 2.5
+.param Iramp      = 600u
+.param Cramp      = 10n
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* ---------------------------------------------------------------
+.options method=gear reltol=1e-3 abstol=1e-6 vntol=1e-4 itl4=150 maxstep=10u
+
+* ---------------------------------------------------------------
+* POWER AND SWITCHING
+* ---------------------------------------------------------------
+Vsup  Vbus_node  0  DC {Vbus}
+
+* Low-side switch
+Ssw  Vbus_node  nd_arm  nd_gate  0  SWmod
+.model SWmod SW(Ron=0.01 Roff=1Meg Vt={Vctrl_thr})
+
+* ---------------------------------------------------------------
+* ARMATURE CIRCUIT
+* ---------------------------------------------------------------
+* Vmeas: nd_arm(+) -> nd_imeas(-), I(Vmeas) = +Ia OK
+Vmeas  nd_arm  nd_imeas  DC 0
+
+Rarm  nd_imeas  nd_a1  {Ra}
+La    nd_a1     nd_a2  {La}
+
+* Eemf: V(nd_a2) - V(0) = +Ke*omega
+* => as omega rises V(nd_a2) rises => Ia drops => braking OK
+Eemf  nd_a2  0  VALUE = { Ke * V(nd_omega) }
+
+* Freewheel diode: anode=0, cathode=nd_arm
+* When the switch opens the current continues in the 0->nd_arm direction OK
+Dfw  0  nd_arm  Dmod
+.model Dmod D(Is=1e-9 Rs=0.05)
+
+* ---------------------------------------------------------------
+* MECHANICAL MODEL
+* J * dOmega/dt = Kt*Ia - Bm*Omega - Tload
+* Baccel 0->nd_omega: current enters the nd_omega node, V rises OK
+* ---------------------------------------------------------------
+Baccel  0  nd_omega  I = { Kt * I(Vmeas) - Bm * V(nd_omega) - Tload }
+Comega  nd_omega  0  {J}
+
+* ---------------------------------------------------------------
+* PI CONTROLLER
+* nd_ prefix: no reserved-word clash
+* ---------------------------------------------------------------
+Vref  nd_ref  0  DC 314
+
+* Error
+Berr  nd_err  0  V = { V(nd_ref) - V(nd_omega) }
+
+* Proportional
+Bprop  nd_prop  0  V = { Kp * V(nd_err) }
+
+* Integral: Cint * dV(nd_intg)/dt = Ki * nd_err
+Bintg  nd_intg  0  I = { Ki * V(nd_err) }
+Cintg  nd_intg  0  1
+
+* Raw PI
+Braw  nd_raw  0  V = { V(nd_prop) + V(nd_intg) }
+
+* Saturation [0, Vctrl_high]
+Bsat  nd_sat  0  V = { limit( V(nd_raw), 0, Vctrl_high ) }
+
+* ---------------------------------------------------------------
+* PWM GENERATOR
+* Peak = 600u * 200u / 10n = 12V = Vctrl_high OK
+* ---------------------------------------------------------------
+Biramp  nd_ramp  0  I = { Iramp }
+Cramp   nd_ramp  0  {Cramp}
+
+Vreset  nd_rtrig  0  PULSE(0 {Vctrl_high} 0 100n 100n 300n {Tperiod})
+Sres  nd_ramp  0  nd_rtrig  0  SWres
+.model SWres SW(Ron=0.1 Roff=1Meg Vt=2)
+
+* ---------------------------------------------------------------
+* GATE: nd_sat > ramp -> gate high -> switch closes
+* ---------------------------------------------------------------
+Bgate  nd_gate  0  V = { Vctrl_high * ( V(nd_sat) > V(nd_ramp) ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(nd_omega)=0  V(nd_intg)=0  V(nd_ramp)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(nd_omega) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat) V(nd_ramp) V(nd_gate)
+  wrdata dcmotor_final.csv time V(nd_omega) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat) V(nd_gate)
+
+.endc
+
+.end

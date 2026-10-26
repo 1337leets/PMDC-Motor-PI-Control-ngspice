@@ -1,0 +1,122 @@
+* dcmotor_averaged.cir
+* PMDC motor speed control - PI controller, AVERAGED MODEL
+*
+* An averaged model is used instead of cycle-by-cycle PWM simulation.
+* Why:
+*   - tau_e=4ms, tau_m=1s, PWM_period=200us -> 3 different time scales
+*   - Switching + a stiff mechanical system causes numerical instability in ngspice
+*   - The averaged model has no switch, and the B-source chain is much shorter
+*   - A fully valid approach for control system verification
+*
+* AVERAGED MODEL LOGIC:
+*   PWM duty = Vsat / Vbus
+*   Average voltage applied to the motor = duty * Vbus = Vsat
+*   So the PI output Vsat maps directly to the motor voltage.
+*   Vsat limit: [0, Vbus] = [0, 24V]
+*
+* EXPECTED STEADY STATE:
+*   Ia_ss = Bm*omega_ref/Kt = 1e-4*314/0.02 = 1.57 A
+*   Va_ss = Ia_ss*Ra + Ke*omega_ref = 0.785 + 6.28 = 7.065 V
+*   V(nd_sat)_ss = 7.065 V
+*   V(nd_intg)_ss ~ 7.065 V  (prop->0 as the error goes to zero)
+*   Settling time ~ 3-5 * tau_m = 3-5 seconds
+*
+* ============================================================
+
+.tran 1m 5 uic
+
+* --- Parameters ---
+.param Vbus  = 24
+.param Ke    = 0.02
+.param Kt    = 0.02
+.param Ra    = 0.5
+.param La    = 2e-3
+.param J     = 1e-4
+.param Bm    = 1e-4
+.param Tload = 0
+
+* PI gains
+.param Kp = 0.05
+.param Ki = 2
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* No switching in the averaged model, much less stiff
+* ---------------------------------------------------------------
+.options method=gear reltol=1e-4 abstol=1e-9 vntol=1e-6 itl4=100 maxstep=1m
+
+* ---------------------------------------------------------------
+* MOTOR ARMATURE CIRCUIT (averaged)
+*
+* Eva: connects the PI output directly to the motor voltage
+* Eva nd_va 0: V(nd_va) = V(nd_sat) = average motor voltage
+* ---------------------------------------------------------------
+Eva  nd_va  0  VALUE = { V(nd_sat) }
+
+* Vmeas: 0V source for current sensing
+* I(Vmeas) = Ia (positive = in the nd_va -> nd_imeas direction)
+Vmeas  nd_va  nd_imeas  DC 0
+
+Rarm  nd_imeas  nd_a1  {Ra}
+La    nd_a1     nd_a2  {La}
+
+* Back-EMF: V(nd_a2) = +Ke*omega -> current is braked
+* 'Eemf nd_a2 0': V(nd_a2) - V(0) = +Ke*omega
+Eemf  nd_a2  0  VALUE = { Ke * V(nd_omega) }
+
+* ---------------------------------------------------------------
+* MECHANICAL MODEL
+* J * dOmega/dt = Kt*Ia - Bm*Omega - Tload
+*
+* 'Baccel 0 nd_omega': B-source current flows from 0 to nd_omega
+*   => current enters the nd_omega node => V(nd_omega) rises
+* 'Comega nd_omega 0 {J}': positive node = nd_omega
+*   => J * dV(nd_omega)/dt = Kt*I(Vmeas) - Bm*V(nd_omega) - Tload
+* ---------------------------------------------------------------
+Baccel  0  nd_omega  I = { Kt * I(Vmeas) - Bm * V(nd_omega) - Tload }
+Comega  nd_omega  0  {J}
+
+* ---------------------------------------------------------------
+* PI CONTROLLER
+* nd_ prefix: no name clashes with ngspice reserved words
+* ---------------------------------------------------------------
+
+* Reference speed: 314 rad/s ~ 3000 rpm
+Vref  nd_ref  0  DC 314
+
+* Error: nd_err = ref - omega
+Berr  nd_err  0  V = { V(nd_ref) - V(nd_omega) }
+
+* Proportional: nd_prop = Kp * err
+Bprop  nd_prop  0  V = { Kp * V(nd_err) }
+
+* Integral: Cintg * dV(nd_intg)/dt = Ki * err
+* Cintg = 1F chosen -> V(nd_intg) = Ki * integral(err)dt
+Bintg  nd_intg  0  I = { Ki * V(nd_err) }
+Cintg  nd_intg  0  1
+
+* Raw PI output
+Braw  nd_raw  0  V = { V(nd_prop) + V(nd_intg) }
+
+* Saturation: [0, Vbus]
+* In the averaged model it maps directly to Va, so the [0, Vbus] limit is correct
+Bsat  nd_sat  0  V = { limit( V(nd_raw), 0, Vbus ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(nd_omega)=0  V(nd_intg)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(nd_omega) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat)
+  wrdata dcmotor_averaged.csv time V(nd_omega) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat)
+
+.endc
+
+.end

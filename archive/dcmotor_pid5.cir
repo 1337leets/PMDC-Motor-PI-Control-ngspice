@@ -1,0 +1,165 @@
+* dcmotor_pid5.cir
+* PMDC motor speed control - PI controller + PWM
+*
+* ============================================================
+* SYSTEMATIC VERIFICATION NOTES
+* ============================================================
+*
+* Circuit topology (switch closed, current direction):
+*   +Vbus -> Ssw -> arm -> Vmeas(+/-) -> a_meas -> Rarm -> a1 -> La -> a2 -> Eemf -> 0
+*
+* --- Vmeas ---
+*   Definition: arm(+) -> a_meas(-)
+*   In normal operation the current enters the + terminal
+*   => I(Vmeas) = +Ia (positive) OK
+*
+* --- Eemf ---
+*   KVL: Vbus = Ia*Ra + La*dIa/dt + V(a2)
+*   Back-EMF braking requires V(a2) = +Ke*omega
+*   => Eemf a2 0 VALUE = { Ke * V(omega) }
+*   (ngspice: 'E A B' -> V(A)-V(B) = value, so V(a2)-V(0) = +Ke*omega OK)
+*   NOTE: with 'Eemf 0 a2', V(a2) = -Ke*omega -> positive feedback -> blow-up X
+*
+* --- Freewheel diode ---
+*   When the switch opens the La current continues: a1->a2->Eemf->0, then needs a return path
+*   The current must go from 0 to arm: anode=0, cathode=arm
+*   => Dfw 0 arm
+*   NOTE: with 'Dfw arm 0' it would conduct continuously with Vsup=24V X
+*
+* --- Baccel ---
+*   'Baccel 0 omega' -> B-source current flows from 0 to omega
+*   Comega(omega, 0) -> omega is the positive node
+*   => J * dV(omega)/dt = Kt*Ia - Bm*omega - Tload OK
+*
+* --- Expected steady state ---
+*   Ia_ss = Bm*omega_ref/Kt = 1e-4*314/0.02 = 1.57 A
+*   Va_ss = Ia_ss*Ra + Ke*omega_ref = 0.785 + 6.28 = 7.065 V
+*   Duty  = Va_ss/Vbus = 7.065/24 = 29.4%
+*   At the PWM comparator: Vsat_ss = duty * Vctrl_high = 0.294 * 12 = 3.53 V
+*
+* ============================================================
+
+.tran 5u 2 uic
+
+* --- Parameters ---
+.param Vbus     = 24
+.param fsw      = 5000
+.param Tperiod  = { 1/fsw }
+
+* Motor parameters
+.param Ke   = 0.02
+.param Kt   = 0.02
+.param Ra   = 0.5
+.param La   = 2e-3
+.param J    = 1e-4
+.param Bm   = 1e-4
+.param Tload= 0
+
+* PI gains
+.param Kp   = 0.05
+.param Ki   = 2
+
+* PWM parameters
+.param Vctrl_high = 12
+.param Vctrl_thr  = 2.5
+.param Iramp  = 600u
+.param Cramp  = 10n
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* ---------------------------------------------------------------
+.options method=gear
++        reltol=1e-3
++        abstol=1e-6
++        vntol=1e-4
++        itl4=150
++        maxstep=10u
+
+* ---------------------------------------------------------------
+* POWER AND SWITCHING
+* ---------------------------------------------------------------
+Vsup  Vsup_node 0  DC {Vbus}
+
+Ssw  Vsup_node  arm  gate  0  SWmod
+.model SWmod SW(Ron=0.01 Roff=1Meg Vt={Vctrl_thr})
+
+* ---------------------------------------------------------------
+* ARMATURE CIRCUIT
+* ---------------------------------------------------------------
+Vmeas  arm  a_meas  DC 0
+
+Rarm  a_meas  a1  {Ra}
+La    a1      a2  {La}
+
+* Back-EMF: V(a2)-V(0) = +Ke*omega -> braking OK
+Eemf  a2  0  VALUE = { Ke * V(omega) }
+
+* Freewheel diode: anode=0, cathode=arm
+* When the switch opens it conducts 0->arm and keeps the La current flowing OK
+Dfw  0  arm  Dmod
+.model Dmod D(Is=1e-9 Rs=0.05)
+
+* ---------------------------------------------------------------
+* MECHANICAL MODEL
+* ---------------------------------------------------------------
+* J * dOmega/dt = Kt*Ia - Bm*Omega - Tload
+* B-source in the 0->omega direction -> current enters the omega node -> V(omega) rises OK
+Baccel  0  omega  I = { Kt * I(Vmeas) - Bm * V(omega) - Tload }
+Comega  omega  0  {J}
+
+* ---------------------------------------------------------------
+* PI CONTROLLER
+* ---------------------------------------------------------------
+Vref  ref  0  DC 314
+
+Berr  err  0  V = { V(ref) - V(omega) }
+
+* Proportional
+Bprop  prop  0  V = { Kp * V(err) }
+
+* Integral: Cint*dV(int)/dt = Ki*err -> V(int) = (Ki/Cint)*integral(err)dt
+Bi_int  int  0  I = { Ki * V(err) }
+Cint    int  0  1
+
+* Raw PI output
+Bpid_raw  pid_raw  0  V = { V(prop) + V(int) }
+
+* Saturation: [0, Vctrl_high]
+Bsat  Vsat  0  V = { limit( V(pid_raw), 0, Vctrl_high ) }
+
+* ---------------------------------------------------------------
+* PWM GENERATOR
+* ---------------------------------------------------------------
+* Peak = Iramp * Tperiod / Cramp = 600u * 200u / 10n = 12V OK
+Bi_ramp  rnode  0  I = { Iramp }
+Cramp    rnode  0  {Cramp}
+
+* Reset pulse: short, clean reset
+Vreset  rtrig  0  PULSE(0 {Vctrl_high} 0 100n 100n 300n {Tperiod})
+Sres  rnode  0  rtrig  0  SWres
+.model SWres SW(Ron=0.1 Roff=1Meg Vt=2)
+
+* ---------------------------------------------------------------
+* GATE SIGNAL
+* ---------------------------------------------------------------
+* Vsat > ramp -> gate high -> switch closes
+Bgate  gate  0  V = { Vctrl_high * ( V(Vsat) > V(rnode) ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(omega)=0  V(int)=0  V(rnode)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(omega) V(err) V(int) V(prop) V(pid_raw) V(Vsat) V(rnode) V(gate)
+  wrdata dcmotor_out5.csv time V(omega) V(err) V(int) V(prop) V(pid_raw) V(Vsat) V(gate)
+
+.endc
+
+.end

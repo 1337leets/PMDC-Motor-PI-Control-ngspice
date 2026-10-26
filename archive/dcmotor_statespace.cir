@@ -1,0 +1,100 @@
+* dcmotor_statespace.cir
+* PMDC motor speed control - PI + state-space averaged model
+*
+* APPROACH:
+*   Both Ia and omega are state variables (stored as V across a capacitor).
+*   No E-source, Vmeas or I(V) -> no algebraic loop.
+*
+*   La * dIa/dt  = Va - Ra*Ia - Ke*omega
+*   J  * dOmega/dt = Kt*Ia - Bm*omega - Tload
+*
+*   ngspice model:
+*     C * dV/dt = I  <->  state variable = voltage across the capacitor
+*
+*   nd_ia    : V(nd_ia)    = Ia    [A]  , C = La
+*   nd_omega : V(nd_omega) = omega [rad/s], C = J
+*
+* STEADY STATE:
+*   Ia_ss    = Bm*omega_ref / Kt = 1.57 A
+*   Va_ss    = Ia_ss*Ra + Ke*omega_ref = 7.065 V
+*   nd_sat_ss = 7.065 V
+*   nd_intg_ss ~ 7.065 V
+*
+* ============================================================
+
+.tran 10m 10 uic
+
+* --- Parameters ---
+.param Vbus  = 24
+.param Ke    = 0.02
+.param Kt    = 0.02
+.param Ra    = 0.5
+.param La    = 2e-3
+.param J     = 1e-4
+.param Bm    = 1e-4
+.param Tload = 0
+
+.param Kp    = 0.05
+.param Ki    = 2
+
+* ---------------------------------------------------------------
+* NUMERICAL SOLVER
+* ---------------------------------------------------------------
+.options method=gear reltol=1e-4 abstol=1e-9 vntol=1e-6 itl4=100 maxstep=10m
+
+* ---------------------------------------------------------------
+* ARMATURE CURRENT STATE (nd_ia)
+*
+* La * dIa/dt = Va - Ra*Ia - Ke*omega
+* => Bia 0 nd_ia I = { Va - Ra*V(nd_ia) - Ke*V(nd_omega) }
+*    Cia nd_ia 0 {La}
+*
+* B-source: current in the 0->nd_ia direction -> nd_ia rises (Ia rises) OK
+* ---------------------------------------------------------------
+Bia  0  nd_ia  I = { V(nd_sat) - Ra*V(nd_ia) - Ke*V(nd_omega) }
+Cia  nd_ia  0  {La}
+
+* ---------------------------------------------------------------
+* MECHANICAL STATE (nd_omega)
+*
+* J * dOmega/dt = Kt*Ia - Bm*omega - Tload
+* => Bomega 0 nd_omega I = { Kt*V(nd_ia) - Bm*V(nd_omega) - Tload }
+*    Comega nd_omega 0 {J}
+*
+* B-source: current in the 0->nd_omega direction -> nd_omega rises OK
+* ---------------------------------------------------------------
+Bomega  0  nd_omega  I = { Kt*V(nd_ia) - Bm*V(nd_omega) - Tload }
+Comega  nd_omega  0  {J}
+
+* ---------------------------------------------------------------
+* PI CONTROLLER
+* ---------------------------------------------------------------
+Vref  nd_ref  0  DC 314
+
+Berr   nd_err   0  V = { V(nd_ref) - V(nd_omega) }
+Bprop  nd_prop  0  V = { Kp * V(nd_err) }
+
+Bintg  nd_intg  0  I = { Ki * V(nd_err) }
+Cintg  nd_intg  0  1
+
+Braw   nd_raw   0  V = { V(nd_prop) + V(nd_intg) }
+Bsat   nd_sat   0  V = { limit( V(nd_raw), 0, Vbus ) }
+
+* ---------------------------------------------------------------
+* INITIAL CONDITIONS
+* ---------------------------------------------------------------
+.ic V(nd_ia)=0  V(nd_omega)=0  V(nd_intg)=0
+
+* ---------------------------------------------------------------
+* SIMULATION
+* ---------------------------------------------------------------
+.control
+  set noaskquit
+  run
+
+  save time V(nd_omega) V(nd_ia) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat)
+  wrdata dcmotor_statespace.csv time V(nd_omega) V(nd_ia) V(nd_err) V(nd_intg) V(nd_prop) V(nd_raw) V(nd_sat)
+
+.endc
+
+.end
