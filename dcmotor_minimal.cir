@@ -1,9 +1,9 @@
 * dcmotor_minimal.cir
 * PMDC motor - PI kontrolor, minimal state-space
 *
-* Sadece uc dinamik dugum var: nd_ia, nd_omega, nd_intg
-* Hic ara dugum yok /  algebraic loop yok
-* limit() yerine min(max())
+* Only three dynamic nodes: nd_ia, nd_omega, nd_intg
+* No intermediate nodes, no algebraic loop
+* min(max()) is used instead of limit()
 *
 * Denklemler:
 *   La * dIa/dt    = Va - Ra*Ia - Ke*omega
@@ -44,7 +44,7 @@ Comega  nd_omega  0  {J}
 Bintg  0  nd_intg  I = { Ki * (omega_ref - V(nd_omega)) }
 Cintg  nd_intg  0  1
 
-* --- Gozlemlemek icin yardimci dugumler (dinamik degil) ---
+* --- Helper nodes for observation (not dynamic) ---
 Bva    nd_va    0  V = { min(Vbus, max(0, Kp*(omega_ref - V(nd_omega)) + V(nd_intg))) }
 Berr   nd_err   0  V = { omega_ref - V(nd_omega) }
 
